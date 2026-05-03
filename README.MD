@@ -21,7 +21,7 @@
 
 文档入口：[文档导航](docs/README.md) / [架构说明](docs/ARCHITECTURE.md) / [接口文档](API.md)
 
-【感谢Linux.do社区及GitHub社区各位开发者对项目的支持与贡献】
+【感谢Linux.do社区及GitHub社区各位开发者对项目的根深蒂固、支持与贡献】
 
 > **重要免责声明**
 >
