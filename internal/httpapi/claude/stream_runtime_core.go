@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"ds2api/internal/responsehistory"
 	"ds2api/internal/sse"
 	streamengine "ds2api/internal/stream"
 	"ds2api/internal/toolcall"
@@ -28,9 +29,10 @@ type claudeStreamRuntime struct {
 	bufferToolContent     bool
 	stripReferenceMarkers bool
 
-	messageID string
-	thinking  strings.Builder
-	text      strings.Builder
+	messageID         string
+	thinking          strings.Builder
+	text              strings.Builder
+	responseMessageID int
 
 	sieve                 toolstream.State
 	rawText               strings.Builder
@@ -46,6 +48,7 @@ type claudeStreamRuntime struct {
 	textEmitted        bool
 	ended              bool
 	upstreamErr        string
+	history            *responsehistory.Session
 }
 
 func newClaudeStreamRuntime(
@@ -60,6 +63,7 @@ func newClaudeStreamRuntime(
 	toolNames []string,
 	toolsRaw any,
 	promptTokenText string,
+	history *responsehistory.Session,
 ) *claudeStreamRuntime {
 	return &claudeStreamRuntime{
 		w:                     w,
@@ -74,6 +78,7 @@ func newClaudeStreamRuntime(
 		toolNames:             toolNames,
 		toolsRaw:              toolsRaw,
 		promptTokenText:       promptTokenText,
+		history:               history,
 		messageID:             fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		thinkingBlockIndex:    -1,
 		textBlockIndex:        -1,
@@ -87,6 +92,9 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 	if parsed.ErrorMessage != "" {
 		s.upstreamErr = parsed.ErrorMessage
 		return streamengine.ParsedDecision{Stop: true, StopReason: streamengine.StopReason("upstream_error")}
+	}
+	if parsed.ResponseMessageID > 0 {
+		s.responseMessageID = parsed.ResponseMessageID
 	}
 	if parsed.Stop {
 		return streamengine.ParsedDecision{Stop: true}
@@ -232,5 +240,11 @@ func (s *claudeStreamRuntime) onParsed(parsed sse.LineResult) streamengine.Parse
 		}
 	}
 
+	if s.history != nil {
+		s.history.Progress(
+			responsehistory.ThinkingForArchive(s.rawThinking.String(), s.toolDetectionThinking.String(), s.thinking.String()),
+			responsehistory.TextForArchive(s.rawText.String(), s.text.String()),
+		)
+	}
 	return streamengine.ParsedDecision{ContentSeen: contentSeen}
 }

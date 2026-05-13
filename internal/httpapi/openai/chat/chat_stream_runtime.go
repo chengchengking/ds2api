@@ -127,13 +127,7 @@ func (s *chatStreamRuntime) sendKeepAlive() {
 		return
 	}
 	_, _ = s.w.Write([]byte(": keep-alive\n\n"))
-	s.sendChunk(openaifmt.BuildChatStreamChunk(
-		s.completionID,
-		s.created,
-		s.model,
-		[]map[string]any{},
-		nil,
-	))
+	_ = s.rc.Flush()
 }
 
 func (s *chatStreamRuntime) sendChunk(v any) {
@@ -193,6 +187,24 @@ func (s *chatStreamRuntime) markContextCancelled() {
 	s.finalThinking = s.accumulator.Thinking.String()
 	s.finalText = cleanVisibleOutput(s.accumulator.Text.String(), s.stripReferenceMarkers)
 	s.finalFinishReason = string(streamengine.StopReasonContextCancelled)
+}
+
+func (s *chatStreamRuntime) historyText() string {
+	if s == nil {
+		return ""
+	}
+	return historyTextForArchive(s.accumulator.RawText.String(), s.finalText)
+}
+
+func (s *chatStreamRuntime) historyThinking() string {
+	if s == nil {
+		return ""
+	}
+	return historyThinkingForArchive(
+		s.accumulator.RawThinking.String(),
+		s.accumulator.ToolDetectionThinking.String(),
+		s.finalThinking,
+	)
 }
 
 func (s *chatStreamRuntime) resetStreamToolCallState() {

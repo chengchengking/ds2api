@@ -2,6 +2,7 @@ package claude
 
 import (
 	"ds2api/internal/assistantturn"
+	"ds2api/internal/responsehistory"
 	"ds2api/internal/sse"
 	"ds2api/internal/toolcall"
 	"ds2api/internal/toolstream"
@@ -62,13 +63,10 @@ func (s *claudeStreamRuntime) sendToolUseBlock(idx int, tc toolcall.ParsedToolCa
 	})
 }
 
-func (s *claudeStreamRuntime) finalize(stopReason string) {
+func (s *claudeStreamRuntime) finalize(stopReason string, deferEmptyOutput bool) bool {
 	if s.ended {
-		return
+		return true
 	}
-	s.ended = true
-
-	s.closeThinkingBlock()
 
 	if s.bufferToolContent {
 		for _, evt := range toolstream.Flush(&s.sieve, s.toolNames) {
@@ -122,6 +120,7 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 		RawThinking:           s.rawThinking.String(),
 		VisibleThinking:       s.thinking.String(),
 		DetectionThinking:     s.toolDetectionThinking.String(),
+		ResponseMessageID:     s.responseMessageID,
 		AlreadyEmittedCalls:   s.toolCallsDetected,
 		AlreadyEmittedToolRaw: s.toolCallsDetected,
 	}, assistantturn.BuildOptions{
@@ -136,6 +135,22 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 	outcome := assistantturn.FinalizeTurn(turn, assistantturn.FinalizeOptions{
 		AlreadyEmittedToolCalls: s.toolCallsDetected,
 	})
+	if outcome.ShouldFail {
+		if deferEmptyOutput {
+			return false
+		}
+		s.ended = true
+		s.closeThinkingBlock()
+		s.closeTextBlock()
+		if s.history != nil {
+			s.history.Error(outcome.Error.Status, outcome.Error.Message, outcome.Error.Code, responsehistory.ThinkingForArchive(turn.RawThinking, turn.DetectionThinking, turn.Thinking), responsehistory.TextForArchive(turn.RawText, turn.Text))
+		}
+		s.sendErrorWithCode(outcome.Error.Status, outcome.Error.Message, outcome.Error.Code)
+		return true
+	}
+
+	s.ended = true
+	s.closeThinkingBlock()
 
 	if s.bufferToolContent && !s.toolCallsDetected {
 		if len(turn.ToolCalls) > 0 {
@@ -175,6 +190,15 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 	if outcome.HasToolCalls {
 		stopReason = "tool_use"
 	}
+	if s.history != nil {
+		s.history.Success(
+			200,
+			responsehistory.ThinkingForArchive(turn.RawThinking, turn.DetectionThinking, turn.Thinking),
+			responsehistory.TextForArchive(turn.RawText, turn.Text),
+			stopReason,
+			responsehistory.GenericUsage(turn),
+		)
+	}
 
 	s.send("message_delta", map[string]any{
 		"type": "message_delta",
@@ -187,16 +211,23 @@ func (s *claudeStreamRuntime) finalize(stopReason string) {
 		},
 	})
 	s.send("message_stop", map[string]any{"type": "message_stop"})
+	return true
 }
 
 func (s *claudeStreamRuntime) onFinalize(reason streamengine.StopReason, scannerErr error) {
 	if string(reason) == "upstream_error" {
+		if s.history != nil {
+			s.history.Error(500, s.upstreamErr, "upstream_error", responsehistory.ThinkingForArchive(s.rawThinking.String(), s.toolDetectionThinking.String(), s.thinking.String()), responsehistory.TextForArchive(s.rawText.String(), s.text.String()))
+		}
 		s.sendError(s.upstreamErr)
 		return
 	}
 	if scannerErr != nil {
+		if s.history != nil {
+			s.history.Error(500, scannerErr.Error(), "error", responsehistory.ThinkingForArchive(s.rawThinking.String(), s.toolDetectionThinking.String(), s.thinking.String()), responsehistory.TextForArchive(s.rawText.String(), s.text.String()))
+		}
 		s.sendError(scannerErr.Error())
 		return
 	}
-	s.finalize("end_turn")
+	s.finalize("end_turn", false)
 }
